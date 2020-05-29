@@ -1,0 +1,111 @@
+#importeren packages om files in te lezen en te visualiseren
+import numpy as np
+import pandas as pd
+import os
+import matplotlib.pyplot as plt
+
+path = ('')
+#zet directory path klaar en importeer csv files uit deze map
+os.chdir(path)
+calendar = pd.read_csv('calendar.csv')
+sales_train_validation = pd.read_csv('sales_train_validation.csv')
+sell_prices = pd.read_csv('sell_prices.csv')
+
+#memory usage before downcasting
+sales_bd = np.round(sales_train_validation.memory_usage().sum()/(1024*1024),1)
+calendar_bd = np.round(calendar.memory_usage().sum()/(1024*1024),1)
+prices_bd = np.round(sell_prices.memory_usage().sum()/(1024*1024),1)
+
+
+
+def downcast(df):
+    cols = df.dtypes.index.tolist()
+    types = df.dtypes.values.tolist()
+    for i,t in enumerate(types):
+        if 'int' in str(t):
+            if df[cols[i]].min() > np.iinfo(np.int8).min and df[cols[i]].max() < np.iinfo(np.int8).max:
+                df[cols[i]] = df[cols[i]].astype(np.int8)
+            elif df[cols[i]].min() > np.iinfo(np.int16).min and df[cols[i]].max() < np.iinfo(np.int16).max:
+                df[cols[i]] = df[cols[i]].astype(np.int16)
+            elif df[cols[i]].min() > np.iinfo(np.int32).min and df[cols[i]].max() < np.iinfo(np.int32).max:
+                df[cols[i]] = df[cols[i]].astype(np.int32)
+            else:
+                df[cols[i]] = df[cols[i]].astype(np.int64)
+        elif 'float' in str(t):
+            if df[cols[i]].min() > np.finfo(np.float16).min and df[cols[i]].max() < np.finfo(np.float16).max:
+                df[cols[i]] = df[cols[i]].astype(np.float16)
+            elif df[cols[i]].min() > np.finfo(np.float32).min and df[cols[i]].max() < np.finfo(np.float32).max:
+                df[cols[i]] = df[cols[i]].astype(np.float32)
+            else:
+                df[cols[i]] = df[cols[i]].astype(np.float64)
+        elif t == np.object:
+            if cols[i] == 'date':
+                df[cols[i]] = pd.to_datetime(df[cols[i]], format='%Y-%m-%d')
+            else:
+                df[cols[i]] = df[cols[i]].astype('category')
+    return df 
+
+downcast(sales_train_validation)
+downcast(sell_prices)
+downcast(calendar)
+
+#berekenen memory usages after downcasting
+import seaborn as sns
+sales_ad = np.round(sales_train_validation.memory_usage().sum()/(1024*1024),1)
+calendar_ad = np.round(calendar.memory_usage().sum()/(1024*1024),1)
+prices_ad = np.round(sell_prices.memory_usage().sum()/(1024*1024),1)
+
+dic= {'DataFrame':['sales', 'calendar', 'prices'] ,'Before Downcasting' :[sales_bd, calendar_bd, prices_bd], 'After Downcasting':[sales_ad, calendar_ad, prices_ad]}
+
+memory= pd.DataFrame(dic)
+memory = pd.melt(memory, id_vars='DataFrame', var_name='Status', value_name='Memory_MB')
+memory.sort_values('Memory_MB',inplace=True)
+
+#barplot memory usage reduction
+def legend_without_duplicate_labels(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    unique = [(h, l) for i, (h, l) in enumerate(zip(handles, labels)) if l not in labels[:i]]
+    ax.legend(*zip(*unique))
+        
+        
+g= sns.barplot(x='DataFrame', y='Memory_MB', data=memory, hue='Status')
+for p in g.patches:
+  g.annotate('{:.0f}'.format(p.get_height()), (p.get_x()+0.3, p.get_height()),
+                            ha='center', va='bottom',
+                            color= 'black')
+  legend_without_duplicate_labels(g)
+  
+#melting sales data to be the same as calendar
+sales_train_validation_melted= sales_train_validation.melt( id_vars=['id','item_id','dept_id','cat_id','store_id', 'state_id'], var_name='d', value_name='sold_items')
+view_table=sales_train_validation_melted.groupby(['store_id','state_id']).sum()
+view_table_dropped= view_table.dropna()
+calendar_sales_combined= sales_train_validation_melted.merge(calendar, left_on='d', right_on='d',
+          suffixes=('_sales', '_calendar'))
+
+calendar_sales_combined.isnull().sum()
+wallmart_data= calendar_sales_combined.merge(sell_prices, left_on=['store_id','item_id','wm_yr_wk'], right_on=['store_id','item_id','wm_yr_wk'], copy=False)
+
+#tijd toevoegingen
+def add_date_feature(df):
+
+    df["month"] = df["date"].dt.month.astype("int8")
+    df["week"] = df["date"].dt.week.astype("int8")
+    df["day"] = df["date"].dt.day.astype("int8")
+    df["quarter"]  = df["date"].dt.quarter.astype("int8")
+    return df
+
+add_date_feature(wallmart_data)
+
+#grouped
+grouped_cat_date= wallmart_data.groupby(['cat_id', 'date'])['sold_items'].sum()
+
+#plot whice cat is doing best in items and fluctuate most
+
+plt.figure()
+plt.plot(grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=='FOODS'].index.get_level_values('date'), grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=='FOODS'].values, label='FOOD')
+plt.plot(grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=='HOBBIES'].index.get_level_values('date'), grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=='HOBBIES'].values, label='HOBBIES')
+plt.plot(grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=='HOUSEHOLD'].index.get_level_values('date'), grouped_cat_date[grouped_cat_date.index.get_level_values('cat_id')=="HOUSEHOLD"].values, label='HOUSEHOLD')
+plt.xlabel('Year')
+plt.ylabel('# of sold items')
+plt.title('Number of sold items per category over the years')
+plt.legend()
